@@ -2,7 +2,7 @@
 name = "mycodex"
 version = "0.1.0"
 edition = "2024"
-description = "Local proxy launcher MVP for the Microsoft Store Codex app."
+description = "Local proxy launcher MVP for the Microsoft Store ChatGPT app."
 license = "MIT"
 
 [dependencies]

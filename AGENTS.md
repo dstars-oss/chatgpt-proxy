@@ -2,10 +2,10 @@
 
 ## Project
 
-MyCodex is a standalone Windows launcher for the Microsoft Store Codex app. It is not a Codex
-plugin package.
+MyCodex is a standalone Windows launcher for the Microsoft Store ChatGPT app (package identity
+`OpenAI.Codex`). It is not a Codex plugin package.
 
-The current verified goal is to start Store Codex with a local proxy without enabling the global
+The current verified goal is to start Store ChatGPT with a local proxy without enabling the global
 Windows proxy and without modifying files under `C:\Program Files\WindowsApps`.
 
 ## Launch Method
@@ -13,7 +13,7 @@ Windows proxy and without modifying files under `C:\Program Files\WindowsApps`.
 The launcher starts the Store app executable directly with `std::process::Command`:
 
 ```text
-<InstallLocation>\app\Codex.exe --proxy-server=http://127.0.0.1:7897
+<InstallLocation>\app\ChatGPT.exe --proxy-server=http://127.0.0.1:7897
 ```
 
 It sets proxy environment variables only on that launched process:
@@ -37,9 +37,9 @@ Do not reintroduce the discarded approaches unless explicitly requested:
 - Local API relay.
 - `app.asar` or `WindowsApps` file modification.
 
-## Discovering Codex.exe
+## Discovering ChatGPT.exe
 
-When `--codex-exe` is not provided, the launcher discovers the Store package install directory by
+When `--chatgpt-exe` is not provided, the launcher discovers the Store package install directory by
 running PowerShell:
 
 ```powershell
@@ -51,19 +51,22 @@ Get-AppxPackage -Name OpenAI.Codex |
 It reads the package `InstallLocation`, then appends:
 
 ```text
-app\Codex.exe
+app\ChatGPT.exe
 ```
+
+For compatibility with older Store packages, it falls back to `app\Codex.exe` only when
+`app\ChatGPT.exe` is absent.
 
 For the current tested package this resolves to a path like:
 
 ```text
-C:\Program Files\WindowsApps\OpenAI.Codex_26.608.1337.0_x64__2p2nqsd0c76g0\app\Codex.exe
+C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe
 ```
 
 If discovery fails or the Store package layout changes, pass an explicit executable path:
 
 ```powershell
-cargo run -- launch --codex-exe "C:\Program Files\WindowsApps\...\app\Codex.exe"
+cargo run -- launch --chatgpt-exe "C:\Program Files\WindowsApps\...\app\ChatGPT.exe"
 ```
 
 ## Verification
@@ -77,7 +80,7 @@ cargo build
 cargo run -- launch --dry-run
 ```
 
-For real launch verification, close existing `Codex.exe` windows first, then run:
+For real launch verification, close existing `ChatGPT.exe` windows first, then run:
 
 ```powershell
 cargo run -- launch
@@ -106,11 +109,11 @@ The shortcut target is the installed launcher, its arguments are:
 launch
 ```
 
-The shortcut icon must come from the Microsoft Store Codex executable discovered by the normal
-Codex path lookup:
+The shortcut icon must come from the Microsoft Store ChatGPT executable discovered by the normal
+Store app path lookup:
 
 ```text
-<InstallLocation>\app\Codex.exe,0
+<InstallLocation>\app\ChatGPT.exe,0
 ```
 
 The install command supports overwrite installation. If the launcher is already running from

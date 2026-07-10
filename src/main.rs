@@ -9,6 +9,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 const DEFAULT_PACKAGE_NAME: &str = "OpenAI.Codex";
+const DEFAULT_APP_EXE_NAME: &str = "ChatGPT.exe";
+const LEGACY_APP_EXE_NAME: &str = "Codex.exe";
 const DEFAULT_PROXY: &str = "http://127.0.0.1:7897";
 const DEFAULT_NO_PROXY: &str = "localhost,127.0.0.1,::1";
 const APP_DISPLAY_NAME: &str = "MyCodex";
@@ -25,7 +27,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Launch the Microsoft Store Codex app with proxy arguments and proxy env.
+    /// Launch the Microsoft Store ChatGPT app with proxy arguments and proxy env.
     Launch(LaunchOptions),
     /// Install MyCodex into the current user profile and create a Start Menu shortcut.
     Install(InstallOptions),
@@ -40,8 +42,8 @@ struct InstallOptions {
 
 #[derive(Debug, Args, Clone)]
 struct LaunchOptions {
-    /// Codex.exe path. Defaults to the installed OpenAI.Codex package path.
-    #[arg(long)]
+    /// ChatGPT.exe path. Defaults to the installed OpenAI.Codex package path.
+    #[arg(long = "chatgpt-exe", visible_alias = "codex-exe", value_name = "PATH")]
     codex_exe: Option<PathBuf>,
 
     /// Local HTTP proxy used by Chromium and child-process proxy env.
@@ -64,7 +66,7 @@ struct LaunchOptions {
     #[arg(long, default_value_t = 10_000)]
     env_check_timeout_ms: u64,
 
-    /// Add --remote-debugging-port=<PORT> to Codex startup arguments.
+    /// Add --remote-debugging-port=<PORT> to ChatGPT startup arguments.
     #[arg(long)]
     remote_debugging_port: Option<u16>,
 
@@ -72,15 +74,15 @@ struct LaunchOptions {
     #[arg(long)]
     remote_allow_origins: Option<String>,
 
-    /// Print the launch target and arguments without launching Codex.
+    /// Print the launch target and arguments without launching ChatGPT.
     #[arg(long)]
     dry_run: bool,
 
-    /// Allow launch when Codex.exe is already running.
+    /// Allow launch when the Store app executable is already running.
     #[arg(long)]
     allow_existing_instance: bool,
 
-    /// Extra arguments passed to Codex after `--`.
+    /// Extra arguments passed to ChatGPT after `--`.
     #[arg(last = true)]
     extra_args: Vec<String>,
 }
@@ -139,7 +141,7 @@ fn launch(options: LaunchOptions) -> Result<()> {
         println!("Proxy env: per-process HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY");
     }
 
-    println!("Codex exe: {}", codex_exe.display());
+    println!("ChatGPT exe: {}", codex_exe.display());
     println!(
         "Starting: {}",
         format_direct_command(&codex_exe, &plan.args)
@@ -149,9 +151,14 @@ fn launch(options: LaunchOptions) -> Result<()> {
         return Ok(());
     }
 
-    if !plan.allow_existing_instance && process_is_running("Codex.exe")? {
+    let app_image_name = codex_exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("Store app executable path has no valid UTF-8 file name")?;
+
+    if !plan.allow_existing_instance && process_is_running(app_image_name)? {
         bail!(
-            "Codex.exe is already running. Close Codex first so startup proxy settings are applied to a fresh process, or pass --allow-existing-instance to skip this guard."
+            "{app_image_name} is already running. Close ChatGPT first so startup proxy settings are applied to a fresh process, or pass --allow-existing-instance to skip this guard."
         );
     }
 
@@ -161,7 +168,7 @@ fn launch(options: LaunchOptions) -> Result<()> {
         &plan.proxy_env,
         &plan.proxy_env_removals,
     )?;
-    println!("Started Codex process id: {pid}");
+    println!("Started ChatGPT process id: {pid}");
 
     if let Some(timeout) = plan.env_check_timeout {
         wait_for_app_server_proxy_env(pid, &plan.proxy_env, timeout)?;
@@ -177,7 +184,7 @@ fn install(options: InstallOptions) -> Result<()> {
     let target_exe = install_dir.join(INSTALLED_EXE_NAME);
     let shortcut_path = default_start_menu_shortcut_path()?;
     let icon_path =
-        resolve_codex_exe(None).context("failed to resolve Store Codex.exe for shortcut icon")?;
+        resolve_codex_exe(None).context("failed to resolve Store ChatGPT.exe for shortcut icon")?;
 
     println!(
         "{APP_DISPLAY_NAME} install source: {}",
@@ -600,15 +607,21 @@ fn process_is_running(image_name: &str) -> Result<bool> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let expected_prefix = format!("\"{image_name}\"");
-    Ok(stdout
-        .lines()
-        .any(|line| line.trim_start().starts_with(&expected_prefix)))
+    Ok(tasklist_contains_image(&stdout, image_name))
 }
 
 #[cfg(not(windows))]
 fn process_is_running(_image_name: &str) -> Result<bool> {
     Ok(false)
+}
+
+fn tasklist_contains_image(stdout: &str, image_name: &str) -> bool {
+    stdout.lines().any(|line| {
+        line.trim_start()
+            .split_once(',')
+            .map(|(field, _)| field.trim_matches('"').eq_ignore_ascii_case(image_name))
+            .unwrap_or(false)
+    })
 }
 
 fn quote_windows_arg(arg: &str) -> String {
@@ -658,7 +671,7 @@ fn resolve_codex_exe(explicit: Option<&Path>) -> Result<PathBuf> {
             return Ok(path.to_path_buf());
         }
 
-        bail!("Codex executable does not exist: {}", path.display());
+        bail!("ChatGPT executable does not exist: {}", path.display());
     }
 
     default_codex_exe_path()
@@ -720,18 +733,24 @@ fn same_file_path(left: &Path, right: &Path) -> bool {
 #[cfg(windows)]
 fn default_codex_exe_path() -> Result<PathBuf> {
     let install_location = find_appx_install_location(DEFAULT_PACKAGE_NAME)?;
-    let codex_exe = install_location.join("app").join("Codex.exe");
+    let app_dir = install_location.join("app");
 
-    if !codex_exe.is_file() {
-        bail!("resolved Codex.exe does not exist: {}", codex_exe.display());
+    for executable_name in [DEFAULT_APP_EXE_NAME, LEGACY_APP_EXE_NAME] {
+        let executable = app_dir.join(executable_name);
+        if executable.is_file() {
+            return Ok(executable);
+        }
     }
 
-    Ok(codex_exe)
+    bail!(
+        "neither {DEFAULT_APP_EXE_NAME} nor {LEGACY_APP_EXE_NAME} exists under {}",
+        app_dir.display()
+    )
 }
 
 #[cfg(not(windows))]
 fn default_codex_exe_path() -> Result<PathBuf> {
-    bail!("automatic Codex.exe discovery is only supported on Windows; pass --codex-exe")
+    bail!("automatic ChatGPT.exe discovery is only supported on Windows; pass --chatgpt-exe")
 }
 
 #[cfg(windows)]
@@ -887,21 +906,21 @@ mod tests {
     #[test]
     fn quotes_paths_with_spaces() {
         assert_eq!(
-            quote_windows_arg(r"C:\Users\Name With Space\Codex.exe"),
-            r#""C:\Users\Name With Space\Codex.exe""#
+            quote_windows_arg(r"C:\Users\Name With Space\ChatGPT.exe"),
+            r#""C:\Users\Name With Space\ChatGPT.exe""#
         );
     }
 
     #[test]
     fn formats_direct_command_with_quoted_executable() {
         let command = format_direct_command(
-            Path::new(r"C:\Program Files\WindowsApps\OpenAI.Codex\app\Codex.exe"),
+            Path::new(r"C:\Program Files\WindowsApps\OpenAI.Codex\app\ChatGPT.exe"),
             &["--proxy-server=http://127.0.0.1:7897".to_string()],
         );
 
         assert_eq!(
             command,
-            r#""C:\Program Files\WindowsApps\OpenAI.Codex\app\Codex.exe" --proxy-server=http://127.0.0.1:7897"#
+            r#""C:\Program Files\WindowsApps\OpenAI.Codex\app\ChatGPT.exe" --proxy-server=http://127.0.0.1:7897"#
         );
     }
 
@@ -960,10 +979,31 @@ mod tests {
     #[test]
     fn custom_codex_exe_is_kept_in_plan() {
         let mut options = default_launch_options();
-        options.codex_exe = Some(PathBuf::from(r"C:\Codex.exe"));
+        options.codex_exe = Some(PathBuf::from(r"C:\ChatGPT.exe"));
 
         let plan = build_launch_plan(options).unwrap();
 
-        assert_eq!(plan.codex_exe, Some(PathBuf::from(r"C:\Codex.exe")));
+        assert_eq!(plan.codex_exe, Some(PathBuf::from(r"C:\ChatGPT.exe")));
+    }
+
+    #[test]
+    fn accepts_current_and_legacy_executable_flags() {
+        for flag in ["--chatgpt-exe", "--codex-exe"] {
+            let cli = Cli::try_parse_from(["MyCodex", "launch", flag, r"C:\ChatGPT.exe"]).unwrap();
+            let Command::Launch(options) = cli.command.unwrap() else {
+                panic!("expected launch command");
+            };
+
+            assert_eq!(options.codex_exe, Some(PathBuf::from(r"C:\ChatGPT.exe")));
+        }
+    }
+
+    #[test]
+    fn tasklist_image_matching_is_case_insensitive_and_exact() {
+        let stdout = "\"ChatGPT.exe\",\"1234\",\"Console\",\"1\",\"10,000 K\"\r\n";
+
+        assert!(tasklist_contains_image(stdout, "chatgpt.exe"));
+        assert!(!tasklist_contains_image(stdout, "ChatGPT"));
+        assert!(!tasklist_contains_image(stdout, "Other.exe"));
     }
 }
