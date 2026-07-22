@@ -162,12 +162,28 @@ fn launch(options: LaunchOptions) -> Result<()> {
         );
     }
 
-    let pid = spawn_codex_direct(
+    let pid = match spawn_codex_direct(
         &codex_exe,
         &plan.args,
         &plan.proxy_env,
         &plan.proxy_env_removals,
-    )?;
+    ) {
+        Ok(pid) => pid,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            println!(
+                "Direct launch was denied by the Store package ACL; retrying in the package context."
+            );
+            spawn_codex_in_package_context(
+                &codex_exe,
+                &plan.args,
+                &plan.proxy_env,
+                &plan.proxy_env_removals,
+            )?
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to start {}", codex_exe.display()));
+        }
+    };
     println!("Started ChatGPT process id: {pid}");
 
     if let Some(timeout) = plan.env_check_timeout {
@@ -860,6 +876,14 @@ fn quote_powershell_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn parse_package_launch_pid(stdout: &str) -> Option<u32> {
+    stdout.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("MYCODEX_PID=")
+            .and_then(|pid| pid.parse().ok())
+    })
+}
+
 #[cfg(not(windows))]
 fn create_start_menu_shortcut(
     _shortcut_path: &Path,
@@ -875,7 +899,7 @@ fn spawn_codex_direct(
     args: &[String],
     proxy_env: &[(String, String)],
     proxy_env_removals: &[String],
-) -> Result<u32> {
+) -> std::io::Result<u32> {
     let mut command = ProcessCommand::new(codex_exe);
     command.args(args);
     for key in proxy_env_removals {
@@ -885,10 +909,170 @@ fn spawn_codex_direct(
         command.env(key, value);
     }
 
-    let child = command
-        .spawn()
-        .with_context(|| format!("failed to start {}", codex_exe.display()))?;
+    let child = command.spawn()?;
     Ok(child.id())
+}
+
+#[cfg(windows)]
+fn spawn_codex_in_package_context(
+    codex_exe: &Path,
+    args: &[String],
+    proxy_env: &[(String, String)],
+    proxy_env_removals: &[String],
+) -> Result<u32> {
+    let executable = quote_powershell_string(
+        codex_exe
+            .to_str()
+            .context("Store app executable path is not valid UTF-8")?,
+    );
+    let package_name = quote_powershell_string(DEFAULT_PACKAGE_NAME);
+    let image_name = quote_powershell_string(
+        codex_exe
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("Store app executable path has no valid UTF-8 file name")?,
+    );
+    let launch_argument_line = args
+        .iter()
+        .map(|arg| quote_windows_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut helper_script = String::from("$ErrorActionPreference = 'Stop'\n");
+    for key in proxy_env_removals {
+        helper_script.push_str(&format!(
+            "[Environment]::SetEnvironmentVariable({}, $null, 'Process')\n",
+            quote_powershell_string(key)
+        ));
+    }
+    for (key, value) in proxy_env {
+        helper_script.push_str(&format!(
+            "[Environment]::SetEnvironmentVariable({}, {}, 'Process')\n",
+            quote_powershell_string(key),
+            quote_powershell_string(value)
+        ));
+    }
+    helper_script.push_str(&format!(
+        "Start-Process -FilePath {} -ArgumentList {}\n",
+        executable,
+        quote_powershell_string(&launch_argument_line)
+    ));
+    let helper_script = quote_powershell_string(&helper_script);
+
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+$exe = {executable}
+$imageName = {image_name}
+$pkg = Get-AppxPackage -Name {package_name} |
+    Where-Object {{
+        $installRoot = [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\') + '\'
+        $exe.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)
+    }} |
+    Sort-Object Version -Descending |
+    Select-Object -First 1
+if ($null -eq $pkg) {{
+    throw "The executable is not inside an installed {package_name} package: $exe"
+}}
+
+$manifest = Get-AppxPackageManifest -Package $pkg
+$app = @($manifest.Package.Applications.Application) |
+    Where-Object {{
+        $relativeExe = ([string]$_.Executable).Replace('/', '\')
+        $manifestExe = [IO.Path]::GetFullPath((Join-Path $pkg.InstallLocation $relativeExe))
+        [string]::Equals($manifestExe, $exe, [StringComparison]::OrdinalIgnoreCase)
+    }} |
+    Select-Object -First 1
+if ($null -eq $app) {{
+    throw "The package manifest has no application entry for $exe"
+}}
+
+$before = @(Get-CimInstance Win32_Process |
+    Where-Object {{ $_.Name -eq $imageName }} |
+    ForEach-Object {{ [uint32]$_.ProcessId }})
+$helperScript = {helper_script}
+$encodedHelperScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helperScript))
+$helperArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedHelperScript"
+Invoke-CommandInDesktopPackage `
+    -PackageFamilyName $pkg.PackageFamilyName `
+    -AppId ([string]$app.Id) `
+    -Command (Join-Path $PSHOME 'powershell.exe') `
+    -Args $helperArgs `
+    -PreventBreakaway
+
+$deadline = [DateTime]::UtcNow.AddSeconds(5)
+do {{
+    $newProcesses = @(Get-CimInstance Win32_Process |
+        Where-Object {{ $_.Name -eq $imageName }} |
+        Where-Object {{ $before -notcontains [uint32]$_.ProcessId }})
+    if ($newProcesses.Count -gt 0) {{
+        $newIds = @($newProcesses | ForEach-Object {{ [uint32]$_.ProcessId }})
+        $root = $newProcesses |
+            Where-Object {{ $newIds -notcontains [uint32]$_.ParentProcessId }} |
+            Sort-Object ProcessId |
+            Select-Object -First 1
+        if ($null -ne $root) {{
+            Write-Output "MYCODEX_PID=$($root.ProcessId)"
+            exit 0
+        }}
+    }}
+    Start-Sleep -Milliseconds 50
+}} while ([DateTime]::UtcNow -lt $deadline)
+
+throw "The package command completed, but the new $imageName process was not observed"
+"#
+    );
+
+    let mut command = ProcessCommand::new("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        &script,
+    ]);
+    for key in proxy_env_removals {
+        command.env_remove(key);
+    }
+    for (key, value) in proxy_env {
+        command.env(key, value);
+    }
+
+    let output = command
+        .output()
+        .context("failed to run powershell.exe for package-context launch")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let details = [stderr.trim(), stdout.trim()]
+            .into_iter()
+            .filter(|message| !message.is_empty())
+            .collect::<Vec<_>>()
+            .join("; ");
+        bail!(
+            "failed to start {} in the Store package context: {}",
+            codex_exe.display(),
+            details
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_package_launch_pid(&stdout).with_context(|| {
+        format!(
+            "package-context launch did not report the ChatGPT process id: {}",
+            stdout.trim()
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn spawn_codex_in_package_context(
+    _codex_exe: &Path,
+    _args: &[String],
+    _proxy_env: &[(String, String)],
+    _proxy_env_removals: &[String],
+) -> Result<u32> {
+    bail!("Store package-context launch is only supported on Windows")
 }
 
 #[cfg(test)]
@@ -938,6 +1122,14 @@ mod tests {
             quote_powershell_string(r"C:\Users\O'Brien\MyCodex.lnk"),
             r#"'C:\Users\O''Brien\MyCodex.lnk'"#
         );
+    }
+
+    #[test]
+    fn parses_package_launch_pid_marker() {
+        let stdout = "warning text\r\nMYCODEX_PID=24948\r\n";
+
+        assert_eq!(parse_package_launch_pid(stdout), Some(24948));
+        assert_eq!(parse_package_launch_pid("MYCODEX_PID=invalid"), None);
     }
 
     #[test]

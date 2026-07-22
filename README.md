@@ -6,7 +6,9 @@ per-process proxy environment variables.
 
 ## Scope
 
-- Launches the installed Store package `app\ChatGPT.exe` directly.
+- Launches the installed Store package `app\ChatGPT.exe` directly when its ACL permits it.
+- Automatically retries through a package-context helper when newer Store package ACLs reject
+  direct execution with `ERROR_ACCESS_DENIED`.
 - Adds `--proxy-server=http://127.0.0.1:7897` by default.
 - Sets `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` only on the launched ChatGPT process.
 - Waits for the Codex `resources\codex.exe app-server` child process and verifies that it inherited
@@ -50,7 +52,7 @@ The shortcut launches `MyCodex.exe launch` and uses the Microsoft Store `app\Cha
 Running `install` again overwrites the installed executable, refreshes the shortcut, and removes the
 legacy `Codex++.lnk` shortcut if present.
 
-Preview the direct launch command without launching ChatGPT:
+Preview the launch target and arguments without launching ChatGPT:
 
 ```powershell
 cargo run -- launch --dry-run
@@ -68,10 +70,10 @@ Launch with a custom proxy:
 cargo run -- launch --proxy http://127.0.0.1:7890
 ```
 
-Launch a specific ChatGPT executable directly:
+Launch a specific ChatGPT executable:
 
 ```powershell
-cargo run -- launch --chatgpt-exe "C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe"
+cargo run -- launch --chatgpt-exe "C:\Program Files\WindowsApps\OpenAI.Codex_...\app\ChatGPT.exe"
 ```
 
 The legacy option name `--codex-exe` remains available as an alias.
@@ -82,8 +84,8 @@ Launch without proxy environment variables, keeping only Chromium `--proxy-serve
 cargo run -- launch --no-env
 ```
 
-In direct mode this also removes inherited `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`,
-and their lowercase variants from the launched process.
+This also removes inherited `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, and their
+lowercase variants from the launched process.
 
 Launch without checking whether `app-server` inherited proxy environment variables:
 
@@ -117,9 +119,10 @@ After installation, the installed launcher can be run directly:
 
 ## Current Limitations
 
-- Direct mode discovers the installed package with `Get-AppxPackage -Name OpenAI.Codex` and starts
+- MyCodex discovers the installed package with `Get-AppxPackage -Name OpenAI.Codex` and selects
   `app\ChatGPT.exe`, falling back to the legacy `app\Codex.exe` when needed. Pass `--chatgpt-exe`
   if discovery fails or the package layout changes.
-- Direct mode still depends on the Store app accepting direct execution of `app\ChatGPT.exe`.
+- The package-context fallback depends on the Windows PowerShell `Appx` module and
+  `Invoke-CommandInDesktopPackage` remaining available.
 - It does not modify `app.asar` or files under `C:\Program Files\WindowsApps`.
 - It does not write registry environment values or change the global Windows proxy.

@@ -10,13 +10,20 @@ Windows proxy and without modifying files under `C:\Program Files\WindowsApps`.
 
 ## Launch Method
 
-The launcher starts the Store app executable directly with `std::process::Command`:
+The launcher first tries to start the Store app executable directly with `std::process::Command`:
 
 ```text
 <InstallLocation>\app\ChatGPT.exe --proxy-server=http://127.0.0.1:7897
 ```
 
-It sets proxy environment variables only on that launched process:
+Store package `26.715.9757.0` changed the package ACL so an unpackaged process receives
+`ERROR_ACCESS_DENIED` when executing `app\ChatGPT.exe` directly. On that specific error, the
+launcher uses `Invoke-CommandInDesktopPackage` to start a transient PowerShell helper with the
+package identity. The helper sets the process-only proxy environment and starts the same executable
+with the same arguments; it does not use AUMID activation.
+
+The direct process or package-context helper sets these environment variables only on the launched
+process tree:
 
 ```text
 HTTP_PROXY=http://127.0.0.1:7897
@@ -57,10 +64,10 @@ app\ChatGPT.exe
 For compatibility with older Store packages, it falls back to `app\Codex.exe` only when
 `app\ChatGPT.exe` is absent.
 
-For the current tested package this resolves to a path like:
+For the current tested package this resolves to:
 
 ```text
-C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe
+C:\Program Files\WindowsApps\OpenAI.Codex_26.715.9757.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe
 ```
 
 If discovery fails or the Store package layout changes, pass an explicit executable path:
