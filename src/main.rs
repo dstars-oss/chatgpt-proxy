@@ -130,6 +130,7 @@ fn default_launch_options() -> LaunchOptions {
 fn launch(options: LaunchOptions) -> Result<()> {
     let plan = build_launch_plan(options)?;
     let codex_exe = resolve_codex_exe(plan.codex_exe.as_deref())?;
+    let use_package_context = plan.codex_exe.is_none() || is_store_package_exe(&codex_exe)?;
 
     if plan.proxy_env.is_empty() {
         if plan.proxy_env_removals.is_empty() {
@@ -142,6 +143,14 @@ fn launch(options: LaunchOptions) -> Result<()> {
     }
 
     println!("ChatGPT exe: {}", codex_exe.display());
+    println!(
+        "Launch method: {}",
+        if use_package_context {
+            "Store package context"
+        } else {
+            "direct executable"
+        }
+    );
     println!(
         "Starting: {}",
         format_direct_command(&codex_exe, &plan.args)
@@ -162,27 +171,23 @@ fn launch(options: LaunchOptions) -> Result<()> {
         );
     }
 
-    let pid = match spawn_codex_direct(
-        &codex_exe,
-        &plan.args,
-        &plan.proxy_env,
-        &plan.proxy_env_removals,
-    ) {
-        Ok(pid) => pid,
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            println!(
-                "Direct launch was denied by the Store package ACL; retrying in the package context."
-            );
-            spawn_codex_in_package_context(
-                &codex_exe,
-                &plan.args,
-                &plan.proxy_env,
-                &plan.proxy_env_removals,
-            )?
-        }
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to start {}", codex_exe.display()));
-        }
+    let pid = if use_package_context {
+        // A successful CreateProcess does not imply a package identity. New Store
+        // builds can start directly and then fail during application bootstrap.
+        spawn_codex_in_package_context(
+            &codex_exe,
+            &plan.args,
+            &plan.proxy_env,
+            &plan.proxy_env_removals,
+        )?
+    } else {
+        spawn_codex_direct(
+            &codex_exe,
+            &plan.args,
+            &plan.proxy_env,
+            &plan.proxy_env_removals,
+        )
+        .with_context(|| format!("failed to start {}", codex_exe.display()))?
     };
     println!("Started ChatGPT process id: {pid}");
 
@@ -341,9 +346,11 @@ fn wait_for_app_server_proxy_env(
     }
 
     let deadline = Instant::now() + timeout;
+    let mut candidate = StableProcess::default();
 
     while Instant::now() < deadline {
-        if let Some(app_server_pid) = find_child_process_by_name(parent_pid, "codex.exe")? {
+        let observed_pid = find_child_process_by_name(parent_pid, "codex.exe")?;
+        if let Some(app_server_pid) = candidate.observe(observed_pid, Instant::now()) {
             let env_vars = read_process_environment(app_server_pid).with_context(|| {
                 format!("failed to read app-server env from pid {app_server_pid}")
             })?;
@@ -362,9 +369,30 @@ fn wait_for_app_server_proxy_env(
     }
 
     bail!(
-        "Codex app-server child process was not observed within {} ms",
+        "Codex app-server child process did not remain running for 1000 ms within {} ms; check ChatGPT for a startup error",
         timeout.as_millis()
     )
+}
+
+// Bootstrap may create a temporary codex.exe before starting the main app-server.
+// This filters that transient process; it is not a full application readiness check.
+#[derive(Default)]
+struct StableProcess {
+    candidate: Option<(u32, Instant)>,
+}
+
+impl StableProcess {
+    fn observe(&mut self, pid: Option<u32>, now: Instant) -> Option<u32> {
+        match (self.candidate, pid) {
+            (Some((previous, since)), Some(current)) if previous == current => {
+                (now.duration_since(since) >= Duration::from_secs(1)).then_some(current)
+            }
+            (_, current) => {
+                self.candidate = current.map(|pid| (pid, now));
+                None
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -684,13 +712,53 @@ fn format_direct_command(executable: &Path, args: &[String]) -> String {
 fn resolve_codex_exe(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         if path.is_file() {
-            return Ok(path.to_path_buf());
+            return std::path::absolute(path).context("failed to resolve executable absolute path");
         }
 
         bail!("ChatGPT executable does not exist: {}", path.display());
     }
 
     default_codex_exe_path()
+}
+
+#[cfg(windows)]
+fn is_store_package_exe(executable: &Path) -> Result<bool> {
+    let executable = quote_powershell_string(
+        executable
+            .to_str()
+            .context("executable path is not valid UTF-8")?,
+    );
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+$exe = [IO.Path]::GetFullPath({executable})
+$packages = @(Get-AppxPackage -Name '{DEFAULT_PACKAGE_NAME}' | Where-Object {{
+    $installRoot = [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\') + '\'
+    $exe.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)
+}})
+if ($packages.Count -gt 0) {{ 'MYCODEX_STORE' }} else {{ 'MYCODEX_DIRECT' }}
+"#
+    );
+    let output = ProcessCommand::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .context("failed to query Store package membership")?;
+    if !output.status.success() {
+        bail!(
+            "failed to query Store package membership: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "MYCODEX_STORE" => Ok(true),
+        "MYCODEX_DIRECT" => Ok(false),
+        other => bail!("unexpected Store package membership result: {other}"),
+    }
+}
+
+#[cfg(not(windows))]
+fn is_store_package_exe(_executable: &Path) -> Result<bool> {
+    Ok(false)
 }
 
 fn default_install_dir() -> Result<PathBuf> {
@@ -961,7 +1029,7 @@ fn spawn_codex_in_package_context(
     let script = format!(
         r#"
 $ErrorActionPreference = 'Stop'
-$exe = {executable}
+$exe = [IO.Path]::GetFullPath({executable})
 $imageName = {image_name}
 $pkg = Get-AppxPackage -Name {package_name} |
     Where-Object {{
@@ -991,7 +1059,7 @@ $before = @(Get-CimInstance Win32_Process |
     ForEach-Object {{ [uint32]$_.ProcessId }})
 $helperScript = {helper_script}
 $encodedHelperScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helperScript))
-$helperArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedHelperScript"
+$helperArgs = "-WindowStyle Hidden -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedHelperScript"
 Invoke-CommandInDesktopPackage `
     -PackageFamilyName $pkg.PackageFamilyName `
     -AppId ([string]$app.Id) `
@@ -1078,6 +1146,48 @@ fn spawn_codex_in_package_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_server_must_survive_the_bootstrap_window() {
+        let start = Instant::now();
+        let mut process = StableProcess::default();
+        assert_eq!(process.observe(Some(10), start), None);
+        assert_eq!(
+            process.observe(Some(10), start + Duration::from_millis(999)),
+            None
+        );
+        assert_eq!(
+            process.observe(Some(10), start + Duration::from_secs(1)),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn transient_or_replaced_app_server_does_not_pass_validation() {
+        let start = Instant::now();
+        let mut process = StableProcess::default();
+        assert_eq!(process.observe(Some(10), start), None);
+        assert_eq!(
+            process.observe(None, start + Duration::from_millis(200)),
+            None
+        );
+        assert_eq!(
+            process.observe(Some(10), start + Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            process.observe(Some(20), start + Duration::from_millis(1500)),
+            None
+        );
+        assert_eq!(
+            process.observe(Some(20), start + Duration::from_secs(2)),
+            None
+        );
+        assert_eq!(
+            process.observe(Some(20), start + Duration::from_millis(2500)),
+            Some(20)
+        );
+    }
 
     #[test]
     fn quotes_plain_args_without_changes() {

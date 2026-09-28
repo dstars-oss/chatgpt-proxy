@@ -6,13 +6,14 @@ per-process proxy environment variables.
 
 ## Scope
 
-- Launches the installed Store package `app\ChatGPT.exe` directly when its ACL permits it.
-- Automatically retries through a package-context helper when newer Store package ACLs reject
-  direct execution with `ERROR_ACCESS_DENIED`.
+- Launches the installed Store package `app\ChatGPT.exe` through a package-context helper so
+  application initialization has the required package identity, even when direct execution is allowed.
+- Explicit `--chatgpt-exe` paths inside the installed Store package use the same helper;
+  executables outside the package are launched directly.
 - Adds `--proxy-server=http://127.0.0.1:7897` by default.
 - Sets `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` only on the launched ChatGPT process.
-- Waits for the Codex `resources\codex.exe app-server` child process and verifies that it inherited
-  the proxy environment variables.
+- Waits for a Codex child process to remain running for at least one second and verifies that it
+  inherited the proxy environment variables, avoiding transient bootstrap processes.
 - Refuses to launch over an already running `ChatGPT.exe` by default, because startup flags only
   reliably apply to a fresh process.
 
@@ -122,7 +123,9 @@ After installation, the installed launcher can be run directly:
 - MyCodex discovers the installed package with `Get-AppxPackage -Name OpenAI.Codex` and selects
   `app\ChatGPT.exe`, falling back to the legacy `app\Codex.exe` when needed. Pass `--chatgpt-exe`
   if discovery fails or the package layout changes.
-- The package-context fallback depends on the Windows PowerShell `Appx` module and
+- Store package launch depends on the Windows PowerShell `Appx` module and
   `Invoke-CommandInDesktopPackage` remaining available.
+- The child-process stability and environment check is not a full UI or network readiness check.
+  Timeouts shorter than one second cannot complete this check; `--no-env-check` disables it.
 - It does not modify `app.asar` or files under `C:\Program Files\WindowsApps`.
 - It does not write registry environment values or change the global Windows proxy.

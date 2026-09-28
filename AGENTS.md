@@ -10,17 +10,19 @@ Windows proxy and without modifying files under `C:\Program Files\WindowsApps`.
 
 ## Launch Method
 
-The launcher first tries to start the Store app executable directly with `std::process::Command`:
+The launcher starts the Store app executable with its package identity:
 
 ```text
 <InstallLocation>\app\ChatGPT.exe --proxy-server=http://127.0.0.1:7897
 ```
 
-Store package `26.715.9757.0` changed the package ACL so an unpackaged process receives
-`ERROR_ACCESS_DENIED` when executing `app\ChatGPT.exe` directly. On that specific error, the
-launcher uses `Invoke-CommandInDesktopPackage` to start a transient PowerShell helper with the
-package identity. The helper sets the process-only proxy environment and starts the same executable
-with the same arguments; it does not use AUMID activation.
+Store package `26.924.2738.0` allows direct process creation but fails during application bootstrap
+without a package identity. Do not use `ERROR_ACCESS_DENIED` as the condition for package-context
+launch. The launcher uses `Invoke-CommandInDesktopPackage` to start a hidden, transient PowerShell
+helper with the package identity. The helper sets the process-only proxy environment and starts the
+same executable with the same arguments; it does not use AUMID activation. Explicit executable paths
+inside an installed `OpenAI.Codex` package use the same route; external executables use
+`std::process::Command` directly.
 
 The direct process or package-context helper sets these environment variables only on the launched
 process tree:
@@ -67,7 +69,7 @@ For compatibility with older Store packages, it falls back to `app\Codex.exe` on
 For the current tested package this resolves to:
 
 ```text
-C:\Program Files\WindowsApps\OpenAI.Codex_26.715.9757.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe
+C:\Program Files\WindowsApps\OpenAI.Codex_26.924.2738.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe
 ```
 
 If discovery fails or the Store package layout changes, pass an explicit executable path:
@@ -93,8 +95,11 @@ For real launch verification, close existing `ChatGPT.exe` windows first, then r
 cargo run -- launch
 ```
 
-The launcher waits for `resources\codex.exe app-server` and verifies that it inherited the expected
-proxy environment variables.
+The launcher waits for the same Codex child process to remain running for at least one second and
+verifies that it inherited the expected proxy environment variables. This filters transient bootstrap
+processes but does not prove UI or network readiness. For real launch verification, also check that
+the main window opens and the latest application log has no bootstrap failure. New Store versions
+may run a copied `codex.exe` from local app data instead of `resources\codex.exe`.
 
 ## Install Command
 
