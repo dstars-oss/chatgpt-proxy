@@ -13,13 +13,12 @@ const DEFAULT_APP_EXE_NAME: &str = "ChatGPT.exe";
 const LEGACY_APP_EXE_NAME: &str = "Codex.exe";
 const DEFAULT_PROXY: &str = "http://127.0.0.1:7897";
 const DEFAULT_NO_PROXY: &str = "localhost,127.0.0.1,::1";
-const APP_DISPLAY_NAME: &str = "MyCodex";
-const INSTALLED_EXE_NAME: &str = "MyCodex.exe";
-const START_MENU_SHORTCUT_NAME: &str = "MyCodex.lnk";
-const LEGACY_START_MENU_SHORTCUT_NAME: &str = "Codex++.lnk";
+const APP_DISPLAY_NAME: &str = "chatgpt-proxy";
+const INSTALLED_EXE_NAME: &str = "chatgpt-proxy.exe";
+const START_MENU_SHORTCUT_NAME: &str = "chatgpt-proxy.lnk";
 
 #[derive(Debug, Parser)]
-#[command(name = "MyCodex", bin_name = "MyCodex", version, about)]
+#[command(name = "chatgpt-proxy", bin_name = "chatgpt-proxy", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -29,7 +28,7 @@ struct Cli {
 enum Command {
     /// Launch the Microsoft Store ChatGPT app with proxy arguments and proxy env.
     Launch(LaunchOptions),
-    /// Install MyCodex into the current user profile and create a Start Menu shortcut.
+    /// Install chatgpt-proxy into the current user profile and create a Start Menu shortcut.
     Install(InstallOptions),
 }
 
@@ -247,7 +246,6 @@ fn install(options: InstallOptions) -> Result<()> {
 
     create_start_menu_shortcut(&shortcut_path, &target_exe, &install_dir, &icon_path)?;
     println!("Installed {APP_DISPLAY_NAME} Start Menu shortcut.");
-    remove_legacy_start_menu_shortcut()?;
 
     Ok(())
 }
@@ -736,7 +734,7 @@ $packages = @(Get-AppxPackage -Name '{DEFAULT_PACKAGE_NAME}' | Where-Object {{
     $installRoot = [IO.Path]::GetFullPath($_.InstallLocation).TrimEnd('\') + '\'
     $exe.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)
 }})
-if ($packages.Count -gt 0) {{ 'MYCODEX_STORE' }} else {{ 'MYCODEX_DIRECT' }}
+if ($packages.Count -gt 0) {{ 'CHATGPT_PROXY_STORE' }} else {{ 'CHATGPT_PROXY_DIRECT' }}
 "#
     );
     let output = ProcessCommand::new("powershell.exe")
@@ -750,8 +748,8 @@ if ($packages.Count -gt 0) {{ 'MYCODEX_STORE' }} else {{ 'MYCODEX_DIRECT' }}
         );
     }
     match String::from_utf8_lossy(&output.stdout).trim() {
-        "MYCODEX_STORE" => Ok(true),
-        "MYCODEX_DIRECT" => Ok(false),
+        "CHATGPT_PROXY_STORE" => Ok(true),
+        "CHATGPT_PROXY_DIRECT" => Ok(false),
         other => bail!("unexpected Store package membership result: {other}"),
     }
 }
@@ -774,34 +772,6 @@ fn default_start_menu_shortcut_path() -> Result<PathBuf> {
         .join("Start Menu")
         .join("Programs")
         .join(START_MENU_SHORTCUT_NAME))
-}
-
-fn legacy_start_menu_shortcut_path() -> Result<PathBuf> {
-    let app_data = env::var_os("APPDATA").context("APPDATA is not set")?;
-    Ok(PathBuf::from(app_data)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Start Menu")
-        .join("Programs")
-        .join(LEGACY_START_MENU_SHORTCUT_NAME))
-}
-
-fn remove_legacy_start_menu_shortcut() -> Result<()> {
-    let legacy_shortcut = legacy_start_menu_shortcut_path()?;
-    if legacy_shortcut.exists() {
-        fs::remove_file(&legacy_shortcut).with_context(|| {
-            format!(
-                "failed to remove legacy Start Menu shortcut {}",
-                legacy_shortcut.display()
-            )
-        })?;
-        println!(
-            "Removed legacy Start Menu shortcut {}.",
-            legacy_shortcut.display()
-        );
-    }
-
-    Ok(())
 }
 
 fn same_file_path(left: &Path, right: &Path) -> bool {
@@ -947,7 +917,7 @@ fn quote_powershell_string(value: &str) -> String {
 fn parse_package_launch_pid(stdout: &str) -> Option<u32> {
     stdout.lines().find_map(|line| {
         line.trim()
-            .strip_prefix("MYCODEX_PID=")
+            .strip_prefix("CHATGPT_PROXY_PID=")
             .and_then(|pid| pid.parse().ok())
     })
 }
@@ -1079,7 +1049,7 @@ do {{
             Sort-Object ProcessId |
             Select-Object -First 1
         if ($null -ne $root) {{
-            Write-Output "MYCODEX_PID=$($root.ProcessId)"
+            Write-Output "CHATGPT_PROXY_PID=$($root.ProcessId)"
             exit 0
         }}
     }}
@@ -1229,17 +1199,17 @@ mod tests {
     #[test]
     fn quotes_powershell_strings() {
         assert_eq!(
-            quote_powershell_string(r"C:\Users\O'Brien\MyCodex.lnk"),
-            r#"'C:\Users\O''Brien\MyCodex.lnk'"#
+            quote_powershell_string(r"C:\Users\O'Brien\chatgpt-proxy.lnk"),
+            r#"'C:\Users\O''Brien\chatgpt-proxy.lnk'"#
         );
     }
 
     #[test]
     fn parses_package_launch_pid_marker() {
-        let stdout = "warning text\r\nMYCODEX_PID=24948\r\n";
+        let stdout = "warning text\r\nCHATGPT_PROXY_PID=24948\r\n";
 
         assert_eq!(parse_package_launch_pid(stdout), Some(24948));
-        assert_eq!(parse_package_launch_pid("MYCODEX_PID=invalid"), None);
+        assert_eq!(parse_package_launch_pid("CHATGPT_PROXY_PID=invalid"), None);
     }
 
     #[test]
@@ -1291,7 +1261,8 @@ mod tests {
     #[test]
     fn accepts_current_and_legacy_executable_flags() {
         for flag in ["--chatgpt-exe", "--codex-exe"] {
-            let cli = Cli::try_parse_from(["MyCodex", "launch", flag, r"C:\ChatGPT.exe"]).unwrap();
+            let cli =
+                Cli::try_parse_from(["chatgpt-proxy", "launch", flag, r"C:\ChatGPT.exe"]).unwrap();
             let Command::Launch(options) = cli.command.unwrap() else {
                 panic!("expected launch command");
             };
