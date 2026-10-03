@@ -2,7 +2,7 @@
 
 ## Project
 
-MyCodex is a standalone Windows launcher for the Microsoft Store ChatGPT app (package identity
+chatgpt-proxy is a standalone Windows launcher for the Microsoft Store ChatGPT app (package identity
 `OpenAI.Codex`). It is not a Codex plugin package.
 
 The current verified goal is to start Store ChatGPT with a local proxy without enabling the global
@@ -87,6 +87,7 @@ cargo test
 cargo clippy -- -D warnings
 cargo build
 cargo run -- launch --dry-run
+cargo run -- install --dry-run
 ```
 
 For real launch verification, close existing `ChatGPT.exe` windows first, then run:
@@ -106,13 +107,13 @@ may run a copied `codex.exe` from local app data instead of `resources\codex.exe
 `install` copies the running executable into the current user's local app data directory:
 
 ```text
-%LOCALAPPDATA%\MyCodex\MyCodex.exe
+%LOCALAPPDATA%\chatgpt-proxy\chatgpt-proxy.exe
 ```
 
 It then creates or refreshes this current-user Start Menu shortcut:
 
 ```text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\MyCodex.lnk
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\chatgpt-proxy.lnk
 ```
 
 The shortcut target is the installed launcher, its arguments are:
@@ -129,5 +130,6 @@ Store app path lookup:
 ```
 
 The install command supports overwrite installation. If the launcher is already running from
-`%LOCALAPPDATA%\MyCodex\MyCodex.exe`, skip self-copy and still refresh the shortcut. It also
-removes the legacy `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Codex++.lnk` shortcut if present.
+`%LOCALAPPDATA%\chatgpt-proxy\chatgpt-proxy.exe`, skip self-copy and still refresh the shortcut.
+Old installations are not migrated or removed automatically. Users manually remove the old
+`%LOCALAPPDATA%\MyCodex` directory and `MyCodex.lnk` / `Codex++.lnk` Start Menu shortcuts.

@@ -1,7 +1,7 @@
-# MyCodex
+# chatgpt-proxy
 
-MyCodex is an MVP launcher for the Microsoft Store ChatGPT app on Windows. The Store package is
-still named `OpenAI.Codex`; MyCodex starts its packaged ChatGPT app with Chromium proxy flags and
+chatgpt-proxy is an MVP launcher for the Microsoft Store ChatGPT app on Windows. The Store package is
+still named `OpenAI.Codex`; chatgpt-proxy starts its packaged ChatGPT app with Chromium proxy flags and
 per-process proxy environment variables.
 
 ## Scope
@@ -31,27 +31,37 @@ Build a release executable:
 cargo build --release
 ```
 
+Preview installation without copying files or creating a shortcut:
+
+```powershell
+.\target\release\chatgpt-proxy.exe install --dry-run
+```
+
 Install for the current user:
 
 ```powershell
-.\target\release\mycodex.exe install
+.\target\release\chatgpt-proxy.exe install
 ```
 
 This copies the running executable to:
 
 ```text
-%LOCALAPPDATA%\MyCodex\MyCodex.exe
+%LOCALAPPDATA%\chatgpt-proxy\chatgpt-proxy.exe
 ```
 
 It also creates a current-user Start Menu shortcut:
 
 ```text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\MyCodex.lnk
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\chatgpt-proxy.lnk
 ```
 
-The shortcut launches `MyCodex.exe launch` and uses the Microsoft Store `app\ChatGPT.exe` icon.
-Running `install` again overwrites the installed executable, refreshes the shortcut, and removes the
-legacy `Codex++.lnk` shortcut if present.
+The shortcut launches `chatgpt-proxy.exe launch` and uses the Microsoft Store `app\ChatGPT.exe` icon.
+Running `install` again overwrites the installed executable and refreshes the shortcut. When run
+from the installed executable, it skips self-copy and still refreshes the shortcut.
+
+Old installations are not migrated or removed automatically. If present, manually remove
+`%LOCALAPPDATA%\MyCodex` and the `MyCodex.lnk` / `Codex++.lnk` shortcuts under
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs` when no longer needed.
 
 Preview the launch target and arguments without launching ChatGPT:
 
@@ -115,12 +125,12 @@ cargo run -- launch --allow-existing-instance
 After installation, the installed launcher can be run directly:
 
 ```powershell
-%LOCALAPPDATA%\MyCodex\MyCodex.exe launch
+& "$env:LOCALAPPDATA\chatgpt-proxy\chatgpt-proxy.exe" launch
 ```
 
 ## Current Limitations
 
-- MyCodex discovers the installed package with `Get-AppxPackage -Name OpenAI.Codex` and selects
+- chatgpt-proxy discovers the installed package with `Get-AppxPackage -Name OpenAI.Codex` and selects
   `app\ChatGPT.exe`, falling back to the legacy `app\Codex.exe` when needed. Pass `--chatgpt-exe`
   if discovery fails or the package layout changes.
 - Store package launch depends on the Windows PowerShell `Appx` module and
