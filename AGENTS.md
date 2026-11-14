@@ -116,13 +116,14 @@ It then creates or refreshes this current-user Start Menu shortcut:
 %APPDATA%\Microsoft\Windows\Start Menu\Programs\chatgpt-proxy.lnk
 ```
 
-The shortcut target is the installed launcher, its arguments are:
+The shortcut target is the installed launcher. Its default arguments are:
 
 ```text
-launch
+launch --proxy http://127.0.0.1:7897
 ```
 
-The shortcut icon must come from the Microsoft Store ChatGPT executable discovered by the normal
+`install --proxy <URL>` saves the specified proxy URL in the shortcut arguments. The shortcut icon
+must come from the Microsoft Store ChatGPT executable discovered by the normal
 Store app path lookup:
 
 ```text

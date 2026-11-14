@@ -43,6 +43,12 @@ Install for the current user:
 .\target\release\chatgpt-proxy.exe install
 ```
 
+Install with a custom proxy URL saved in the shortcut:
+
+```powershell
+.\target\release\chatgpt-proxy.exe install --proxy http://127.0.0.1:7890
+```
+
 This copies the running executable to:
 
 ```text
@@ -55,9 +61,11 @@ It also creates a current-user Start Menu shortcut:
 %APPDATA%\Microsoft\Windows\Start Menu\Programs\chatgpt-proxy.lnk
 ```
 
-The shortcut launches `chatgpt-proxy.exe launch` and uses the Microsoft Store `app\ChatGPT.exe` icon.
-Running `install` again overwrites the installed executable and refreshes the shortcut. When run
-from the installed executable, it skips self-copy and still refreshes the shortcut.
+The shortcut launches `chatgpt-proxy.exe launch --proxy <URL>` and uses the Microsoft Store
+`app\ChatGPT.exe` icon. The default URL is `http://127.0.0.1:7897`. Running `install` again overwrites
+the installed executable and refreshes the shortcut; pass `--proxy` again to keep a custom URL in the
+refreshed shortcut. When run from the installed executable, it skips self-copy and still refreshes
+the shortcut.
 
 Old installations are not migrated or removed automatically. If present, manually remove
 `%LOCALAPPDATA%\MyCodex` and the `MyCodex.lnk` / `Codex++.lnk` shortcuts under

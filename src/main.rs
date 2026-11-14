@@ -34,6 +34,10 @@ enum Command {
 
 #[derive(Debug, Args, Clone)]
 struct InstallOptions {
+    /// Proxy URL written to the Start Menu shortcut launch arguments.
+    #[arg(long, default_value = DEFAULT_PROXY)]
+    proxy: String,
+
     /// Print install paths without copying files or creating the shortcut.
     #[arg(long)]
     dry_run: bool,
@@ -203,6 +207,7 @@ fn install(options: InstallOptions) -> Result<()> {
     let install_dir = default_install_dir()?;
     let target_exe = install_dir.join(INSTALLED_EXE_NAME);
     let shortcut_path = default_start_menu_shortcut_path()?;
+    let shortcut_arguments = install_shortcut_arguments(&options.proxy);
     let icon_path =
         resolve_codex_exe(None).context("failed to resolve Store ChatGPT.exe for shortcut icon")?;
 
@@ -215,6 +220,7 @@ fn install(options: InstallOptions) -> Result<()> {
         target_exe.display()
     );
     println!("{APP_DISPLAY_NAME} shortcut: {}", shortcut_path.display());
+    println!("{APP_DISPLAY_NAME} shortcut arguments: {shortcut_arguments}");
     println!(
         "{APP_DISPLAY_NAME} shortcut icon: {},0",
         icon_path.display()
@@ -244,10 +250,20 @@ fn install(options: InstallOptions) -> Result<()> {
         println!("Installed {APP_DISPLAY_NAME} executable.");
     }
 
-    create_start_menu_shortcut(&shortcut_path, &target_exe, &install_dir, &icon_path)?;
+    create_start_menu_shortcut(
+        &shortcut_path,
+        &target_exe,
+        &shortcut_arguments,
+        &install_dir,
+        &icon_path,
+    )?;
     println!("Installed {APP_DISPLAY_NAME} Start Menu shortcut.");
 
     Ok(())
+}
+
+fn install_shortcut_arguments(proxy: &str) -> String {
+    format!("launch --proxy {}", quote_windows_arg(proxy))
 }
 
 fn build_launch_plan(options: LaunchOptions) -> Result<LaunchPlan> {
@@ -848,6 +864,7 @@ fn find_appx_install_location(package_name: &str) -> Result<PathBuf> {
 fn create_start_menu_shortcut(
     shortcut_path: &Path,
     target_exe: &Path,
+    arguments: &str,
     working_dir: &Path,
     icon_path: &Path,
 ) -> Result<()> {
@@ -867,7 +884,7 @@ fn create_start_menu_shortcut(
             .to_str()
             .context("target path is not valid UTF-8")?,
     );
-    let ps_arguments = quote_powershell_string("launch");
+    let ps_arguments = quote_powershell_string(arguments);
     let ps_working_directory = quote_powershell_string(
         working_dir
             .to_str()
@@ -928,6 +945,7 @@ fn parse_package_launch_pid(stdout: &str) -> Option<u32> {
 fn create_start_menu_shortcut(
     _shortcut_path: &Path,
     _target_exe: &Path,
+    _arguments: &str,
     _working_dir: &Path,
     _icon_path: &Path,
 ) -> Result<()> {
@@ -1271,6 +1289,40 @@ mod tests {
 
             assert_eq!(options.codex_exe, Some(PathBuf::from(r"C:\ChatGPT.exe")));
         }
+    }
+
+    #[test]
+    fn install_shortcut_uses_default_proxy() {
+        let cli = Cli::try_parse_from(["chatgpt-proxy", "install"]).unwrap();
+        let Command::Install(options) = cli.command.unwrap() else {
+            panic!("expected install command");
+        };
+
+        assert_eq!(options.proxy, DEFAULT_PROXY);
+        assert_eq!(
+            install_shortcut_arguments(&options.proxy),
+            "launch --proxy http://127.0.0.1:7897"
+        );
+    }
+
+    #[test]
+    fn install_shortcut_accepts_custom_proxy_url() {
+        let cli = Cli::try_parse_from([
+            "chatgpt-proxy",
+            "install",
+            "--proxy",
+            "http://127.0.0.1:7890",
+        ])
+        .unwrap();
+        let Command::Install(options) = cli.command.unwrap() else {
+            panic!("expected install command");
+        };
+
+        assert_eq!(options.proxy, "http://127.0.0.1:7890");
+        assert_eq!(
+            install_shortcut_arguments(&options.proxy),
+            "launch --proxy http://127.0.0.1:7890"
+        );
     }
 
     #[test]
