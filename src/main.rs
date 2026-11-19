@@ -15,7 +15,8 @@ const DEFAULT_PROXY: &str = "http://127.0.0.1:7897";
 const DEFAULT_NO_PROXY: &str = "localhost,127.0.0.1,::1";
 const APP_DISPLAY_NAME: &str = "chatgpt-proxy";
 const INSTALLED_EXE_NAME: &str = "chatgpt-proxy.exe";
-const START_MENU_SHORTCUT_NAME: &str = "chatgpt-proxy.lnk";
+const START_MENU_SHORTCUT_NAME: &str = "MyCodex.lnk";
+const SHORTCUT_ICON_NAME: &str = "MyCodex.ico";
 
 #[derive(Debug, Parser)]
 #[command(name = "chatgpt-proxy", bin_name = "chatgpt-proxy", version, about)]
@@ -208,8 +209,9 @@ fn install(options: InstallOptions) -> Result<()> {
     let target_exe = install_dir.join(INSTALLED_EXE_NAME);
     let shortcut_path = default_start_menu_shortcut_path()?;
     let shortcut_arguments = install_shortcut_arguments(&options.proxy);
-    let icon_path =
+    let app_icon_source =
         resolve_codex_exe(None).context("failed to resolve Store ChatGPT.exe for shortcut icon")?;
+    let shortcut_icon_path = install_dir.join(SHORTCUT_ICON_NAME);
 
     println!(
         "{APP_DISPLAY_NAME} install source: {}",
@@ -222,8 +224,12 @@ fn install(options: InstallOptions) -> Result<()> {
     println!("{APP_DISPLAY_NAME} shortcut: {}", shortcut_path.display());
     println!("{APP_DISPLAY_NAME} shortcut arguments: {shortcut_arguments}");
     println!(
+        "{APP_DISPLAY_NAME} shortcut icon source: {}",
+        app_icon_source.display()
+    );
+    println!(
         "{APP_DISPLAY_NAME} shortcut icon: {},0",
-        icon_path.display()
+        shortcut_icon_path.display()
     );
 
     if options.dry_run {
@@ -250,12 +256,18 @@ fn install(options: InstallOptions) -> Result<()> {
         println!("Installed {APP_DISPLAY_NAME} executable.");
     }
 
+    extract_shortcut_icon(&app_icon_source, &shortcut_icon_path)?;
+    println!(
+        "Saved {APP_DISPLAY_NAME} shortcut icon to {}.",
+        shortcut_icon_path.display()
+    );
+
     create_start_menu_shortcut(
         &shortcut_path,
         &target_exe,
         &shortcut_arguments,
         &install_dir,
-        &icon_path,
+        &shortcut_icon_path,
     )?;
     println!("Installed {APP_DISPLAY_NAME} Start Menu shortcut.");
 
@@ -860,6 +872,141 @@ fn find_appx_install_location(package_name: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(install_location))
 }
 
+fn build_shortcut_icon_extraction_script(source_exe: &Path, icon_path: &Path) -> Result<String> {
+    let ps_source_exe = quote_powershell_string(
+        source_exe
+            .to_str()
+            .context("icon source path is not valid UTF-8")?,
+    );
+    let ps_icon_path = quote_powershell_string(
+        icon_path
+            .to_str()
+            .context("shortcut icon path is not valid UTF-8")?,
+    );
+    let mut script = format!(
+        "$ErrorActionPreference = 'Stop'\n$sourceExe = {ps_source_exe}\n$iconPath = {ps_icon_path}\n"
+    );
+    script.push_str(
+        r#"Add-Type -AssemblyName System.Drawing
+Add-Type -Namespace ChatGPTProxy.Install -Name NativeIcon -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("User32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern uint PrivateExtractIcons(
+    string fileName,
+    int iconIndex,
+    int width,
+    int height,
+    System.IntPtr[] handles,
+    uint[] ids,
+    uint count,
+    uint flags);
+[System.Runtime.InteropServices.DllImport("User32.dll")]
+public static extern bool DestroyIcon(System.IntPtr handle);
+'@
+
+$images = @()
+foreach ($size in @(16, 24, 32, 48, 64, 128, 256)) {
+    $handles = [System.IntPtr[]]::new(1)
+    $ids = [uint32[]]::new(1)
+    $count = [ChatGPTProxy.Install.NativeIcon]::PrivateExtractIcons(
+        $sourceExe, 0, $size, $size, $handles, $ids, 1, 0)
+    if ($count -eq 0 -or $handles[0] -eq [System.IntPtr]::Zero) {
+        continue
+    }
+
+    $icon = [System.Drawing.Icon]::FromHandle($handles[0])
+    try {
+        $bitmap = $icon.ToBitmap()
+        try {
+            $memory = [System.IO.MemoryStream]::new()
+            try {
+                $bitmap.Save($memory, [System.Drawing.Imaging.ImageFormat]::Png)
+                $data = $memory.ToArray()
+            } finally {
+                $memory.Dispose()
+            }
+        } finally {
+            $bitmap.Dispose()
+        }
+
+        $images += [PSCustomObject]@{
+            Width = $icon.Width
+            Height = $icon.Height
+            Data = $data
+        }
+    } finally {
+        $icon.Dispose()
+        [void][ChatGPTProxy.Install.NativeIcon]::DestroyIcon($handles[0])
+    }
+}
+
+if ($images.Count -eq 0) {
+    throw 'No icons could be extracted from the Store app executable'
+}
+
+$stream = [System.IO.File]::Create($iconPath)
+$writer = [System.IO.BinaryWriter]::new($stream)
+try {
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]1)
+    $writer.Write([uint16]$images.Count)
+
+    $offset = 6 + 16 * $images.Count
+    foreach ($image in $images) {
+        $writer.Write([byte]($(if ($image.Width -ge 256) { 0 } else { $image.Width })))
+        $writer.Write([byte]($(if ($image.Height -ge 256) { 0 } else { $image.Height })))
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]32)
+        $writer.Write([uint32]$image.Data.Length)
+        $writer.Write([uint32]$offset)
+        $offset += $image.Data.Length
+    }
+    foreach ($image in $images) {
+        $writer.Write([byte[]]$image.Data)
+    }
+} finally {
+    $writer.Dispose()
+    $stream.Dispose()
+}
+"#,
+    );
+    Ok(script)
+}
+
+#[cfg(windows)]
+fn extract_shortcut_icon(source_exe: &Path, icon_path: &Path) -> Result<()> {
+    let script = build_shortcut_icon_extraction_script(source_exe, icon_path)?;
+    let output = ProcessCommand::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .output()
+        .context("failed to run powershell.exe to extract shortcut icon")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "failed to extract shortcut icon from {} to {}: {}",
+            source_exe.display(),
+            icon_path.display(),
+            stderr.trim()
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn extract_shortcut_icon(_source_exe: &Path, _icon_path: &Path) -> Result<()> {
+    bail!("Shortcut icon extraction is only supported on Windows")
+}
+
 #[cfg(windows)]
 fn create_start_menu_shortcut(
     shortcut_path: &Path,
@@ -1289,6 +1436,26 @@ mod tests {
 
             assert_eq!(options.codex_exe, Some(PathBuf::from(r"C:\ChatGPT.exe")));
         }
+    }
+
+    #[test]
+    fn install_shortcut_uses_my_codex_display_and_stable_icon_names() {
+        assert_eq!(START_MENU_SHORTCUT_NAME, "MyCodex.lnk");
+        assert_eq!(SHORTCUT_ICON_NAME, "MyCodex.ico");
+    }
+
+    #[test]
+    fn icon_extraction_uses_native_high_resolution_images() {
+        let script = build_shortcut_icon_extraction_script(
+            Path::new(r"C:\Program Files\WindowsApps\OpenAI.Codex\app\ChatGPT.exe"),
+            Path::new(r"C:\Users\Test\AppData\Local\chatgpt-proxy\MyCodex.ico"),
+        )
+        .unwrap();
+
+        assert!(script.contains("PrivateExtractIcons"));
+        assert!(script.contains("@(16, 24, 32, 48, 64, 128, 256)"));
+        assert!(script.contains("ImageFormat]::Png"));
+        assert!(!script.contains("ExtractAssociatedIcon"));
     }
 
     #[test]

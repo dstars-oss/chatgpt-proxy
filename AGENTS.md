@@ -113,7 +113,7 @@ may run a copied `codex.exe` from local app data instead of `resources\codex.exe
 It then creates or refreshes this current-user Start Menu shortcut:
 
 ```text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\chatgpt-proxy.lnk
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\MyCodex.lnk
 ```
 
 The shortcut target is the installed launcher. Its default arguments are:
@@ -122,15 +122,20 @@ The shortcut target is the installed launcher. Its default arguments are:
 launch --proxy http://127.0.0.1:7897
 ```
 
-`install --proxy <URL>` saves the specified proxy URL in the shortcut arguments. The shortcut icon
-must come from the Microsoft Store ChatGPT executable discovered by the normal
-Store app path lookup:
+`install --proxy <URL>` saves the specified proxy URL in the shortcut arguments. Native 16, 24, 32,
+48, 64, 128, and 256 pixel images are extracted from the Microsoft Store ChatGPT executable found by
+the normal Store app path lookup, then written as a 32-bit, multi-resolution icon to this stable
+local path. Do not replace this with `Icon.ExtractAssociatedIcon` or `Icon.Save`, which reduce the
+icon to a low-resolution or low-color-depth image:
 
 ```text
-<InstallLocation>\app\ChatGPT.exe,0
+%LOCALAPPDATA%\chatgpt-proxy\MyCodex.ico
 ```
 
+The shortcut must reference `%LOCALAPPDATA%\chatgpt-proxy\MyCodex.ico,0`, not the versioned Store
+package executable path. Reinstalling refreshes the icon from the then-current Store executable.
+
 The install command supports overwrite installation. If the launcher is already running from
-`%LOCALAPPDATA%\chatgpt-proxy\chatgpt-proxy.exe`, skip self-copy and still refresh the shortcut.
-Old installations are not migrated or removed automatically. Users manually remove the old
-`%LOCALAPPDATA%\MyCodex` directory and `MyCodex.lnk` / `Codex++.lnk` Start Menu shortcuts.
+`%LOCALAPPDATA%\chatgpt-proxy\chatgpt-proxy.exe`, skip self-copy and still refresh the icon and
+shortcut. Old installations are not migrated or removed automatically. Users manually remove the
+old `%LOCALAPPDATA%\MyCodex` directory and `chatgpt-proxy.lnk` / `Codex++.lnk` Start Menu shortcuts.

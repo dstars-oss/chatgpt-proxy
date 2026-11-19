@@ -58,17 +58,26 @@ This copies the running executable to:
 It also creates a current-user Start Menu shortcut:
 
 ```text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\chatgpt-proxy.lnk
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\MyCodex.lnk
 ```
 
-The shortcut launches `chatgpt-proxy.exe launch --proxy <URL>` and uses the Microsoft Store
-`app\ChatGPT.exe` icon. The default URL is `http://127.0.0.1:7897`. Running `install` again overwrites
-the installed executable and refreshes the shortcut; pass `--proxy` again to keep a custom URL in the
-refreshed shortcut. When run from the installed executable, it skips self-copy and still refreshes
-the shortcut.
+The shortcut launches `chatgpt-proxy.exe launch --proxy <URL>`. The default URL is
+`http://127.0.0.1:7897`. During installation, native 16, 24, 32, 48, 64, 128, and 256 pixel icon
+images are extracted from the discovered Microsoft Store `app\ChatGPT.exe` and saved as a 32-bit,
+multi-resolution icon at:
+
+```text
+%LOCALAPPDATA%\chatgpt-proxy\MyCodex.ico
+```
+
+The shortcut references this stable local icon path, so a Store app update does not invalidate the
+icon when the package's versioned install directory changes. Running `install` again overwrites the
+installed executable and refreshes both the icon and shortcut; pass `--proxy` again to keep a custom
+URL in the refreshed shortcut. When run from the installed executable, it skips self-copy and still
+refreshes the icon and shortcut.
 
 Old installations are not migrated or removed automatically. If present, manually remove
-`%LOCALAPPDATA%\MyCodex` and the `MyCodex.lnk` / `Codex++.lnk` shortcuts under
+`%LOCALAPPDATA%\MyCodex` and the `chatgpt-proxy.lnk` / `Codex++.lnk` shortcuts under
 `%APPDATA%\Microsoft\Windows\Start Menu\Programs` when no longer needed.
 
 Preview the launch target and arguments without launching ChatGPT:
